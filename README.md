@@ -19,23 +19,40 @@ Mace-RiskPrediction/
 ├── datasets/
 │   └── imputed_proteomics_base.csv     # primary input (94 × 559)
 ├── Random_Forest/
-│   ├── src/                            # pipeline code
+│   ├── src/                            # main pipeline code
 │   │   ├── config.py
 │   │   ├── stability_selection.py
 │   │   ├── metrics_utils.py
 │   │   └── train_rf.py
-│   └── results/                        # populated by the pipeline
-│       ├── summary_metrics.csv         # one row per outcome
-│       ├── summary_metrics.json
-│       └── Within{1..7}Yr/
-│           ├── metrics.json
-│           ├── cv_fold_metrics.csv
-│           ├── cv_predictions.csv
-│           ├── selected_features_cv.csv
-│           ├── final_selected_features.csv
-│           ├── best_hyperparameters.json
-│           ├── model.joblib
-│           └── plots/  (ROC, PR, confusion-matrix, feature plots)
+│   ├── results/                        # populated by the main pipeline
+│   │   ├── summary_metrics.csv         # one row per outcome
+│   │   ├── summary_metrics.json
+│   │   └── Within{1..7}Yr/
+│   │       ├── metrics.json
+│   │       ├── cv_fold_metrics.csv
+│   │       ├── cv_predictions.csv
+│   │       ├── selected_features_cv.csv
+│   │       ├── final_selected_features.csv
+│   │       ├── best_hyperparameters.json
+│   │       ├── model.joblib
+│   │       └── plots/  (ROC, PR, confusion-matrix, feature plots)
+│   ├── src_gradual_training/           # gradual-training analysis
+│   │   ├── config.py                   # which outcomes, hyperparam strategy
+│   │   └── gradual_train.py            # top-k sweep entry point
+│   └── results_gradual_training/       # populated by the gradual pipeline
+│       ├── Report.md                   # cross-outcome scientific report
+│       ├── summary_gradual_training.csv
+│       ├── summary_best_k.png
+│       ├── summary_best_metric_value.png
+│       └── Within{1..7}Yr_results/
+│           ├── report.md               # per-outcome report (peak per metric)
+│           ├── peak_summary.json
+│           ├── metrics_per_k.csv
+│           ├── cv_fold_metrics_per_k.csv
+│           ├── cv_predictions_per_k.csv
+│           ├── best_hyperparameters_per_k.csv
+│           ├── final_selected_features_used.csv
+│           └── plots/  (per-metric vs k, heatmaps, peak markers, ROC overlay)
 ├── Report.md                           # scientific report
 ├── README.md                           # this file
 └── CLAUDE.md                           # implementation notes / dev guide
@@ -144,6 +161,26 @@ The pipeline is deterministic given `RANDOM_STATE = 42` (set in
 `Random_Forest/src/config.py`). Total runtime is on the order of a few
 minutes on a multi-core machine; stability selection and the inner CV use
 all available cores via `joblib`.
+
+### Run the gradual-training analysis
+
+After the main pipeline has finished (the gradual sweep reads its
+`final_selected_features.csv` files), run:
+
+```bash
+# all outcomes configured in src_gradual_training/config.py
+.venv/bin/python Random_Forest/src_gradual_training/gradual_train.py
+
+# subset
+.venv/bin/python Random_Forest/src_gradual_training/gradual_train.py --outcomes Within3Yr Within5Yr
+```
+
+This trains, for each outcome, one Random Forest per `k = 1, 2, ..., N`
+features (where N is the size of the published feature ranking) under the
+same nested CV protocol as the main pipeline, and writes per-k metrics,
+per-fold predictions, and a rich plot suite to
+`Random_Forest/results_gradual_training/`. The cross-outcome scientific
+report is written to `Random_Forest/results_gradual_training/Report.md`.
 
 ### Loading a trained model
 

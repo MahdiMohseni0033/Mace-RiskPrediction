@@ -1,0 +1,116 @@
+{
+  "outcome": "Within3Yr",
+  "n_samples": 94,
+  "n_positive": 36,
+  "n_negative": 58,
+  "prevalence": 0.3829787234042553,
+  "outer_cv": {
+    "n_splits": 5,
+    "n_repeats": 3,
+    "n_total_folds": 15
+  },
+  "inner_cv": {
+    "n_splits": 5
+  },
+  "youden_threshold": 0.3466666666666667,
+  "fold_aggregate_mean_std": {
+    "roc_auc": {
+      "mean": 0.6960317460317459,
+      "std": 0.07653230145413527
+    },
+    "average_precision": {
+      "mean": 0.6503032564035716,
+      "std": 0.10641974416401082
+    },
+    "balanced_accuracy": {
+      "mean": 0.6135281385281386,
+      "std": 0.11104822239836665
+    },
+    "accuracy": {
+      "mean": 0.6703703703703703,
+      "std": 0.10052981406788537
+    },
+    "precision": {
+      "mean": 0.6046560846560847,
+      "std": 0.27842245673776
+    },
+    "recall": {
+      "mean": 0.3785714285714286,
+      "std": 0.1974924805742789
+    },
+    "sensitivity": {
+      "mean": 0.3785714285714286,
+      "std": 0.1974924805742789
+    },
+    "specificity": {
+      "mean": 0.8484848484848484,
+      "std": 0.11000697627335983
+    },
+    "f1": {
+      "mean": 0.4517351167351167,
+      "std": 0.20756322527991383
+    },
+    "brier_score": {
+      "mean": 0.20942310404653341,
+      "std": 0.024565531318488106
+    },
+    "train_brier": {
+      "mean": 0.0343293962200062,
+      "std": 0.013153209955865504
+    },
+    "val_brier": {
+      "mean": 0.2094231040465334,
+      "std": 0.024565531318488106
+    }
+  },
+  "pooled_metrics_threshold_0.5": {
+    "threshold": 0.5,
+    "n": 282,
+    "n_positive": 108,
+    "roc_auc": 0.694790336313325,
+    "average_precision": 0.5858207768929241,
+    "brier_score": 0.209325519070752,
+    "balanced_accuracy": 0.6151021711366539,
+    "accuracy": 0.6702127659574468,
+    "precision": 0.6119402985074627,
+    "recall": 0.37962962962962965,
+    "sensitivity": 0.37962962962962965,
+    "specificity": 0.8505747126436781,
+    "f1": 0.4685714285714286,
+    "confusion_matrix": {
+      "tn": 148,
+      "fp": 26,
+      "fn": 67,
+      "tp": 41
+    }
+  },
+  "pooled_metrics_youden_threshold": {
+    "threshold": 0.3466666666666667,
+    "n": 282,
+    "n_positive": 108,
+    "roc_auc": 0.694790336313325,
+    "average_precision": 0.5858207768929241,
+    "brier_score": 0.209325519070752,
+    "balanced_accuracy": 0.6467113665389528,
+    "accuracy": 0.6312056737588653,
+    "precision": 0.5133333333333333,
+    "recall": 0.7129629629629629,
+    "sensitivity": 0.7129629629629629,
+    "specificity": 0.5804597701149425,
+    "f1": 0.5968992248062015,
+    "confusion_matrix": {
+      "tn": 101,
+      "fp": 73,
+      "fn": 31,
+      "tp": 77
+    }
+  },
+  "n_selected_features_final": 48,
+  "final_best_params": {
+    "max_depth": null,
+    "max_features": "sqrt",
+    "min_samples_leaf": 3,
+    "n_estimators": 300
+  },
+  "elapsed_seconds": 18.689362287521362
+}
