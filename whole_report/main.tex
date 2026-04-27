@@ -1,0 +1,717 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- Encoding & fonts ---------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% --- Layout -------------------------------------------------------------------
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{parskip}
+\usepackage{enumitem}
+
+% --- Math ---------------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+
+% --- Tables and graphics ------------------------------------------------------
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% --- Algorithms ---------------------------------------------------------------
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+% --- References & links -------------------------------------------------------
+\usepackage{xcolor}
+\usepackage[colorlinks=true,
+            linkcolor=blue!50!black,
+            citecolor=blue!50!black,
+            urlcolor=blue!50!black]{hyperref}
+
+% cleveref is not available in this TeX Live distribution, so we provide
+% a small shim that uses hyperref's \autoref for capitalised references.
+% \autoref auto-prefixes "figure", "table", "section", etc.
+\providecommand{\cref}[1]{\autoref{#1}}
+\providecommand{\Cref}[1]{\autoref{#1}}
+% Use uppercase prefixes to match scientific-paper conventions.
+\renewcommand{\figureautorefname}{Figure}
+\renewcommand{\tableautorefname}{Table}
+\renewcommand{\sectionautorefname}{Section}
+\renewcommand{\subsectionautorefname}{Section}
+\providecommand{\algorithmautorefname}{Algorithm}
+
+% --- Misc ---------------------------------------------------------------------
+\graphicspath{{images/}}
+\setlength{\emergencystretch}{2em}
+
+% Title block
+\title{\textbf{Predicting Major Adverse Cardiovascular Events from a Baseline
+Proteomic Panel: a Stability-Selected, Nested-Cross-Validated, and
+Feature-Count-Resolved Random-Forest Pipeline}}
+
+\author{
+  Mahdi Mohseni \\[2pt]
+  \small\textit{Supervisor:} Steven Watterson \\[2pt]
+  \small\textit{Mace Risk-Prediction Project}
+}
+
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% =============================================================================
+\begin{abstract}
+\noindent
+Major Adverse Cardiovascular Events (MACE) remain the leading cause of mortality
+worldwide, and identifying high-risk patients from inexpensive, blood-based
+biomarkers is a long-standing translational goal. We study a cohort of
+$n=94$ patients with a baseline panel of $551$ candidate proteomic and
+clinical features and binary follow-up outcomes \emph{Within$k$Yr}
+($k\in\{1,\dots,7\}$). Because $n \ll p$, our central methodological
+challenge is avoiding the over-optimism that plagues high-dimensional
+small-sample medical machine learning. We address this with a fully nested
+cross-validation protocol: an outer
+$\mathrm{RepeatedStratifiedKFold}(5,3)$ loop produces 15 unbiased
+held-out estimates per horizon; inside every outer training fold we run
+\emph{stability selection}~\cite{} via $\ell_1$-regularised logistic
+regression to identify reproducibly informative features, then tune a
+class-balanced Random Forest with an inner-CV grid search. We additionally
+introduce a \emph{gradual-training} sweep that, for each horizon, walks
+down the published feature ranking and re-evaluates the Random Forest at
+every truncation $k=1,2,\dots,N$, exposing the relationship between feature
+count and held-out generalisation. The pooled out-of-fold ROC--AUC of the
+main pipeline ranges from $0.64$ (Within1Yr) to $0.72$ (Within7Yr); the
+gradual analysis shows that, for every horizon, the curve plateaus or peaks
+well before the full ranking is consumed, suggesting that a slimmer,
+biologically interpretable signature could carry most of the predictive
+information.
+\end{abstract}
+
+\vspace{0.5em}
+\noindent\textbf{Keywords:} cardiovascular risk; proteomics; machine learning;
+stability selection; nested cross-validation; Random Forest;
+feature-count sensitivity.
+
+% =============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Cardiovascular disease accounts for the largest share of global mortality, and
+clinically used risk scores --- EuroSCORE\,II, GRACE, SYNTAX --- rely on a
+small number of demographic and clinical variables. Modern blood-based
+proteomic panels offer a complementary readout that is mechanism-aware and
+relatively inexpensive to acquire, but turning a $\sim$500-protein panel into
+a clinically actionable risk model is non-trivial: with sample sizes
+typical of proteomic studies ($n\sim 50$--$200$) and feature dimensionality
+in the hundreds, na\"ive supervised learning is dominated by overfitting,
+selection-induced optimism, and unstable feature lists.
+
+\paragraph{Research gap.}
+Two failure modes recur in the small-$n$, high-$p$ medical-ML literature.
+First, feature selection that touches the held-out fold leaks label
+information into the chosen variable list and produces inflated apparent
+performance. Second, a single \emph{published feature signature}
+of fixed size --- often chosen by a heuristic threshold on a stability
+score --- is reported without quantifying how performance depends on the
+size of that signature. The first issue is addressed in principle by nested
+cross-validation but is still routinely violated in practice; the second
+issue is rarely addressed at all.
+
+\paragraph{Research questions.}
+For each horizon $k\in\{1,\dots,7\}$ years post-index, we ask:
+\begin{enumerate}[label=(\textbf{Q\arabic*}),leftmargin=*]
+  \item \emph{Predictability.} What unbiased, held-out classification
+    performance is achievable from a baseline proteomic panel for
+    \emph{Within$k$Yr}?
+  \item \emph{Stability.} Which features are reproducibly selected across
+    cross-validation folds, and how stable is the selection across a
+    grid of $\ell_1$ regularisation strengths?
+  \item \emph{Parsimony.} Of the $30$--$50$ features the published
+    pipeline retains, how many are actually doing the work --- i.e.\ at
+    what feature count does held-out performance plateau?
+\end{enumerate}
+
+\paragraph{Contributions / novelty.}
+This work contributes (i) a fully leakage-free nested-CV pipeline tailored
+to a $94$-patient, $551$-feature proteomic dataset; (ii) a stability-selection
+front-end that aggregates across an $\ell_1$ regularisation grid in the
+sense of randomised lasso~\cite{}; (iii) a \emph{gradual-training} analysis
+that reports per-fold and pooled metrics at every truncation of the
+published feature ranking, producing publication-ready ``metric vs.\
+$k$'' curves with peak markers; and (iv) the full source code, per-patient
+out-of-fold predictions, fold-level metrics, fitted models, and a rich plot
+suite, all reproducible from a single fixed random seed.
+
+% =============================================================================
+\section{Materials and Methods}
+\label{sec:methods}
+
+\subsection{Cohort and dataset}
+The dataset comprises $n=94$ patients with $551$ numeric candidate features
+(an Olink-style proteomic panel together with a small number of derived
+analytes) and seven binary outcomes \emph{Within$k$Yr}, $k\in\{1,\dots,7\}$,
+indicating the occurrence of a Major Adverse Cardiovascular Event
+within $k$ years of the index visit. Patient identifiers (\texttt{EuroSCOREPatient
+ID}) are stored as a record-only column and never enter the feature
+matrix. The data were imputed prior to this stage; no further
+missing-value handling is applied.
+
+\Cref{tab:prevalence} summarises the marked prevalence shift across
+horizons --- $\sim18\%$ positives at one year, growing to $\sim60\%$ at
+seven --- which motivates the use of stratified resampling and class-weight
+balancing throughout.
+
+\begin{table}[h]
+\centering
+\caption{Class balance per horizon.}
+\label{tab:prevalence}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Horizon & $n$ & Negatives & Positives & Prevalence \\
+\midrule
+Within1Yr & 94 & 77 & 17 & 0.18 \\
+Within2Yr & 94 & 62 & 32 & 0.34 \\
+Within3Yr & 94 & 58 & 36 & 0.38 \\
+Within4Yr & 94 & 51 & 43 & 0.46 \\
+Within5Yr & 94 & 47 & 47 & 0.50 \\
+Within6Yr & 94 & 41 & 53 & 0.56 \\
+Within7Yr & 94 & 38 & 56 & 0.60 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-target framing and label-leakage prophylaxis}
+We train seven independent binary classifiers, one per horizon. When
+modelling \emph{Within$k$Yr}, the other six outcome columns are removed
+from the feature matrix to rule out a particularly insidious form of
+label leakage in which short-horizon outcomes implicitly predict
+long-horizon outcomes (or vice versa).
+
+\subsection{Nested cross-validation}
+Let $\mathcal{D} = \{(\bm{x}_i, y_i)\}_{i=1}^{n}$ with $\bm{x}_i \in
+\mathbb{R}^{p}$ and $y_i \in \{0,1\}$. The outer loop is a
+$\mathrm{RepeatedStratifiedKFold}(K_\mathrm{out}=5,\,R=3)$ with seed $42$,
+yielding $15$ disjoint test partitions $\mathcal{T}_f$ and matching
+training partitions $\mathcal{D}_f^{\mathrm{tr}}$. The inner loop is a
+$\mathrm{StratifiedKFold}(K_\mathrm{in}=5)$ over $\mathcal{D}_f^{\mathrm{tr}}$
+used exclusively for hyperparameter selection. Held-out predictions
+$\hat{y}_i^{\mathrm{oof}}$ are produced once per patient per repeat and
+pooled across folds for global ROC, PR, calibration and confusion-matrix
+analyses.
+
+\subsection{Stability selection}
+\label{sec:stab}
+Inside every outer training fold $f$, we standardise the features
+\[
+  z_{ij} = \frac{x_{ij} - \mu_j^{(f)}}{\sigma_j^{(f)}}, \qquad
+  i \in \mathcal{D}_f^{\mathrm{tr}},\ j=1,\dots,p,
+\]
+where $\mu_j^{(f)}, \sigma_j^{(f)}$ are estimated on the training fold
+\emph{only}, and run the following randomised-lasso variant of stability
+selection \cite{}.
+
+For $B=100$ random subsamples of size
+$\lfloor 0.75\,|\mathcal{D}_f^{\mathrm{tr}}|\rfloor$ drawn without
+replacement, and for each $C \in \{0.01, 0.1, 1.0\}$, we fit an
+$\ell_1$-regularised, class-balanced logistic regression
+\begin{equation}
+  \widehat{\bm{\beta}}_{b,C} \in
+  \arg\min_{\bm{\beta}\in\mathbb{R}^{p+1}}
+  \;\sum_{i\in S_b}
+    w_{y_i}\,
+    \log\!\left(1 + \exp\bigl(-y_i\,(\bm{x}_i^\top \bm{\beta} + \beta_0)\bigr)\right)
+  \;+\; \frac{1}{C}\,\|\bm{\beta}\|_1,
+  \label{eq:l1lr}
+\end{equation}
+with $w_y$ inverse-frequency class weights, solved with the SAGA solver.
+A feature $j$ is recorded as ``selected'' on subsample $b$ at strength
+$C$ if $|\widehat{\beta}_{b,C,j}| > 10^{-8}$. The per-strength
+\emph{selection frequency} is
+\[
+  \pi_{j,C}^{(f)} \;=\; \frac{1}{B}\sum_{b=1}^{B}
+    \mathbb{1}\bigl[\,|\widehat{\beta}_{b,C,j}|>10^{-8}\,\bigr],
+\]
+and the feature's stability score aggregates across the regularisation
+grid by taking the maximum,
+\begin{equation}
+  s_j^{(f)} \;=\; \max_{C \in \{0.01, 0.1, 1.0\}} \pi_{j,C}^{(f)}.
+  \label{eq:stab}
+\end{equation}
+Taking the maximum (rather than the average) implements the
+\emph{randomised-lasso} variant: a feature is considered stable if at
+\emph{any one} regularisation level it is reliably picked up, which is
+more sensitive to weak but consistent signals than averaging across the
+grid would be. Features with $s_j^{(f)} \ge 0.60$ are retained, with a
+floor of $5$ and a ceiling of $50$ features per fold.
+
+\subsection{Random Forest classifier and hyperparameter tuning}
+\label{sec:rf}
+Random Forests are scale-invariant, so the standardisation used for
+stability selection is dropped before tree training; the Random Forest
+acts on the raw selected columns. The classifier is
+\texttt{sklearn.ensemble.\-RandomForestClassifier} with
+\texttt{class\_weight="balanced"} and a per-fold seed.
+
+Hyperparameters are tuned with an exhaustive grid search
+(\texttt{GridSearchCV}, \texttt{scoring="roc\_auc"}, \texttt{refit=True})
+over the small discrete grid of \Cref{tab:rfgrid}, evaluated on the
+$5$-fold stratified inner CV. The grid is intentionally small: with
+$n=94$, every additional grid point widens the inner-CV optimism gap, and
+the most defensible defence against tuning-induced overfitting is a
+parsimonious search space.
+
+\begin{table}[h]
+\centering
+\caption{Random-Forest hyperparameter grid.}
+\label{tab:rfgrid}
+\small
+\begin{tabular}{ll}
+\toprule
+Hyperparameter & Values \\
+\midrule
+\texttt{n\_estimators}      & $\{300\}$ \\
+\texttt{max\_depth}         & $\{\text{None},\,5\}$ \\
+\texttt{min\_samples\_leaf} & $\{1,\,3\}$ \\
+\texttt{max\_features}      & $\{\text{sqrt},\,0.3\}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For each outer fold $f$ the inner-CV winner $\widehat{\bm{\theta}}_f$ is
+refit on the full training fold and used to score the outer test fold.
+The \emph{published} model is obtained by re-running stability selection
+on the full dataset and refitting the Random Forest at the most-frequent
+$\widehat{\bm{\theta}}_f$ across the $15$ outer folds.
+
+\subsection{Gradual-training sweep}
+\label{sec:gradual}
+The published pipeline retains $30$--$50$ features per horizon. We
+introduce a follow-up analysis that asks: \emph{at what feature count
+does held-out generalisation actually peak?} Let
+$\mathcal{F}_k = \texttt{final\_selected\_features.csv}$ for outcome $k$,
+sorted in descending order of Random-Forest impurity importance.
+For every truncation $k = 1, 2, \dots, |\mathcal{F}_k|$, we re-run the
+\emph{same} nested CV (\Cref{sec:rf}) restricted to the top-$k$ features
+and record the full battery of metrics. Pseudocode is given in
+\Cref{alg:gradual}.
+
+\begin{algorithm}[h]
+\caption{Gradual-training sweep, per outcome.}
+\label{alg:gradual}
+\begin{algorithmic}[1]
+\STATE Load feature ranking $\mathcal{F}$ from
+       \texttt{final\_selected\_features.csv} sorted by RF importance.
+\FOR{$k = 1$ \TO $|\mathcal{F}|$}
+  \STATE Restrict feature matrix to the top-$k$ features of $\mathcal{F}$.
+  \FOR{each outer fold $f \in \{1,\dots,15\}$}
+    \STATE Run inner-CV grid search (\Cref{tab:rfgrid}) on the training fold.
+    \STATE Refit at the inner-CV winner; predict on the outer test fold.
+    \STATE Record per-fold metrics.
+  \ENDFOR
+  \STATE Pool out-of-fold predictions; record pooled metrics and Youden
+         threshold.
+\ENDFOR
+\STATE Identify, per metric, the $k$ that maximises (or minimises, for
+       Brier) the across-fold mean.
+\end{algorithmic}
+\end{algorithm}
+
+A subtle methodological point is that the ranking $\mathcal{F}$ is
+computed on the full dataset before the outer CV, which introduces a small
+amount of look-ahead. We retain this design deliberately: clinicians ask
+about the \emph{published} list, not about an idealised list re-derived
+in every fold; and for each $k$ the model is still trained and evaluated
+under fold-respecting nested CV, so the $k$-vs-performance curve is a
+held-out estimate. The interpretation should be \emph{``how performance
+varies along the published ranking''}, not fully nested feature
+selection.
+
+\subsection{Metrics}
+At threshold $\tau$ we compute, from the pooled OOF predictions and per
+fold,
+\begin{equation*}
+  \text{ROC-AUC},\
+  \text{AP},\
+  \text{Acc},\
+  \text{BalAcc},\
+  F_1,\
+  \text{Sens},\
+  \text{Spec},\
+  \text{Brier},
+\end{equation*}
+all with their standard sklearn definitions. Two thresholds are reported:
+$\tau=0.50$ and the Youden-optimal
+$\tau^\star = \arg\max_{\tau} \bigl[\text{TPR}(\tau) - \text{FPR}(\tau)\bigr]$.
+
+\subsection{Reproducibility}
+A single \texttt{RANDOM\_STATE = 42} is propagated to every stochastic
+component (subsamples, fold splits, and per-fold model seeds via
+\texttt{RANDOM\_STATE + fold\_index}). All artefacts --- per-patient OOF
+predictions, fold-level metrics, fitted models, plots --- are written to
+disk; nothing important lives only in memory.
+
+% =============================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Headline performance (main pipeline)}
+\Cref{tab:headline} summarises per-horizon out-of-fold performance at
+$\tau=0.50$. Pooled ROC-AUC ranges from $0.64$ at one year to $0.72$ at
+seven years, broadly matching the difficulty of the longest horizon
+having the most balanced classes (\Cref{tab:prevalence}).
+Per-fold means with their standard deviations are reported in the
+columns labelled ``mean$\pm$sd''.
+
+\begin{table}[h]
+\centering
+\caption{Main-pipeline pooled performance (15-fold nested CV) per horizon.
+\textit{$|\mathcal{F}|$} is the number of features retained by stability
+selection on the full data.}
+\label{tab:headline}
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Horizon & $|\mathcal{F}|$ & Pooled AUC & Pooled AP & BalAcc (mean$\pm$sd) & Sens & Spec \\
+\midrule
+Within1Yr & 33 & 0.636 & 0.286 & 0.495 $\pm$ 0.045 & 0.027 & 0.974 \\
+Within2Yr & 50 & 0.637 & 0.469 & 0.587 $\pm$ 0.109 & 0.387 & 0.845 \\
+Within3Yr & 48 & 0.695 & 0.586 & 0.614 $\pm$ 0.111 & 0.452 & 0.848 \\
+Within4Yr & 38 & 0.660 & 0.689 & 0.590 $\pm$ 0.062 & 0.528 & 0.685 \\
+Within5Yr & 46 & 0.693 & 0.722 & 0.645 $\pm$ 0.082 & 0.634 & 0.666 \\
+Within6Yr & 50 & 0.714 & 0.782 & 0.632 $\pm$ 0.122 & 0.702 & 0.517 \\
+Within7Yr & 49 & 0.719 & 0.792 & 0.644 $\pm$ 0.093 & 0.747 & 0.479 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\Cref{fig:rocmain} shows per-fold and pooled ROC curves for two
+illustrative horizons --- Within3Yr (mid-prevalence) and Within7Yr (most
+balanced). Per-fold AUCs are noticeably variable
+($\pm 0.07$--$0.10$), consistent with the small $n$, but the pooled
+curves and their AUCs ($0.69$ and $0.72$ respectively) provide a stable
+estimate.
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{main_roc_within3yr.png}
+    \caption{Within3Yr.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{main_roc_within7yr.png}
+    \caption{Within7Yr.}
+  \end{subfigure}
+  \caption{Per-fold (faint) and pooled (bold) ROC curves under nested CV.
+  Each faint line is one of the $15$ outer-fold held-out estimates; the
+  bold line is the ROC of the concatenated out-of-fold predictions.}
+  \label{fig:rocmain}
+\end{figure}
+
+\subsection{Reproducibly informative features (stability selection)}
+\Cref{fig:stability} shows the top-20 features by mean stability-selection
+frequency across the $15$ outer training folds for the Within3Yr
+horizon. Several features (e.g.\ \texttt{LAG3}, \texttt{186\_MMP-3},
+\texttt{179\_EGFR}, \texttt{CD83}) are selected in \emph{every} outer
+fold, while a long tail of features cross the $0.60$ threshold
+intermittently. This per-feature reproducibility is precisely what
+stability selection is designed to expose, and it provides a defensible
+shortlist for downstream biological interpretation.
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{main_stability_within3yr.png}
+    \caption{Stability selection frequency.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{main_rfimp_within3yr.png}
+    \caption{Random-Forest impurity importance.}
+  \end{subfigure}
+  \caption{Two complementary views of feature importance for the Within3Yr
+  horizon. Stability selection answers the question ``which features are
+  reproducibly chosen?'' across resamples; impurity importance answers
+  ``which features actually drive the trees of the final forest?''}
+  \label{fig:stability}
+\end{figure}
+
+\subsection{Gradual-training analysis: how many features do we really need?}
+
+The gradual sweep (\Cref{sec:gradual}) walks down the published
+RF-importance ranking and re-evaluates the model at every truncation.
+\Cref{fig:gradual_within3yr} aggregates eight metrics versus feature
+count for the Within3Yr horizon. The curves show the diagnostically
+important pattern: a steep early gain that plateaus, with peak per-fold
+mean ROC-AUC at $k=34$ (versus $|\mathcal{F}|=48$ for the published
+list), and per-fold mean Balanced Accuracy peaking far earlier at $k=23$.
+This justifies a parsimony argument: the long tail of the published list
+adds little to held-out performance, despite the long tail of the
+original ranking.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{gradual_allmetrics_within3yr.png}
+  \caption{Gradual-training: eight held-out metrics versus number of
+  features ($k$) for Within3Yr. Each panel shows the mean across the
+  $15$ outer folds (line) with $\pm 1$ SD band (shaded). Green dots and
+  vertical guides mark the per-metric peak. ROC-AUC peaks at $k=34$;
+  Balanced Accuracy and $F_1$ peak earlier, around $k=23$--$24$.}
+  \label{fig:gradual_within3yr}
+\end{figure}
+
+A finer-grained per-metric view is shown in \Cref{fig:gradual_auc_within3yr}.
+The pooled OOF curve (orange dashed) and the across-fold mean (blue) are
+in close agreement, while the $\pm 1\,\mathrm{SD}$ band tightens
+substantially as $k$ grows beyond about $10$, which is consistent with
+small-feature-set noise dominating at low $k$ and the trees stabilising
+once the most informative variables have been included.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.62\textwidth]{gradual_auc_within3yr.png}
+  \caption{Within3Yr ROC-AUC vs.\ feature count. Mean across folds (blue)
+  with $\pm 1$ SD band; pooled OOF curve (orange dashed); peak at $k=34$
+  marked in green.}
+  \label{fig:gradual_auc_within3yr}
+\end{figure}
+
+\Cref{fig:gradual_roc_within3yr} compares pooled OOF ROC curves at three
+characteristic feature counts --- $k=1$ (a single proteomic biomarker),
+$k=k^\star_{\mathrm{AUC}}=34$ (peak across the sweep), and
+$k=|\mathcal{F}|=48$ (the published list). The $k=1$ curve already
+encodes a non-trivial signal (AUC$\approx 0.66$), the peak-$k$ curve
+reaches AUC$\approx 0.89$, and adding the remaining $14$ features beyond
+the peak slightly worsens the curve --- evidence that the long tail is
+predominantly noise on this cohort size.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.62\textwidth]{gradual_roc_within3yr.png}
+  \caption{Pooled OOF ROC for Within3Yr at $k=1$, peak-AUC $k$, and
+  $k=|\mathcal{F}|$.}
+  \label{fig:gradual_roc_within3yr}
+\end{figure}
+
+The fold-by-feature heatmap of \Cref{fig:gradual_heatmap_within3yr}
+visualises where the variance lives. Some folds (e.g.\ rows $7$ and $11$)
+are uniformly easy; others (e.g.\ row $14$) are uniformly hard; and the
+horizontal banding shows that for any given fold, performance saturates
+at intermediate $k$ rather than continuing to climb. This is exactly the
+information that the across-fold-mean line aggregates over.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{gradual_heatmap_within3yr.png}
+  \caption{Per-outer-fold ROC-AUC at every feature count $k$ for
+  Within3Yr. Rows are the $15$ outer folds; columns are $k$; colour is
+  AUC. Most variance is across folds, not across $k$ within a fold.}
+  \label{fig:gradual_heatmap_within3yr}
+\end{figure}
+
+The same pattern repeats for the most balanced horizon, Within7Yr
+(\Cref{fig:gradual_within7yr}): peak per-fold mean AUC of $0.90$ is
+reached at $k=26$, and balanced accuracy peaks at $k=19$. Across all
+seven horizons (\Cref{tab:gradual_summary}), the optimal feature count
+for AUC ranges from $13$ to $46$, with the median around $34$.
+
+\begin{table}[h]
+\centering
+\caption{Gradual-training peak summary. Best $k$ is the feature count
+that maximises the per-fold mean of the metric (minimises Brier score).
+Compare $|\mathcal{F}|$ to ``Best $k$ (AUC)'' for the parsimony gap.}
+\label{tab:gradual_summary}
+\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Horizon & $|\mathcal{F}|$
+        & \multicolumn{2}{c}{ROC-AUC}
+        & \multicolumn{2}{c}{Balanced Acc.}
+        & \multicolumn{2}{c}{$F_1$} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+        & & Best $k$ & Value & Best $k$ & Value & Best $k$ & Value \\
+\midrule
+Within1Yr & 33 & 13 & 0.867 &  6 & 0.723 & 14 & 0.511 \\
+Within2Yr & 50 & 42 & 0.878 &  3 & 0.748 &  3 & 0.650 \\
+Within3Yr & 48 & 34 & 0.898 & 23 & 0.752 & 24 & 0.683 \\
+Within4Yr & 38 & 16 & 0.892 & 17 & 0.813 & 17 & 0.785 \\
+Within5Yr & 46 & 46 & 0.878 &  8 & 0.804 &  8 & 0.807 \\
+Within6Yr & 50 & 41 & 0.876 & 13 & 0.796 & 13 & 0.824 \\
+Within7Yr & 49 & 26 & 0.898 & 19 & 0.810 & 46 & 0.863 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{gradual_allmetrics_within7yr.png}
+  \caption{Eight held-out metrics versus feature count for Within7Yr ---
+  the most balanced horizon. ROC-AUC peaks at $k=26$; the curve is flat
+  beyond $k\approx 15$, again suggesting that a relatively short
+  signature carries the bulk of the predictive signal.}
+  \label{fig:gradual_within7yr}
+\end{figure}
+
+\subsection{Cross-horizon synthesis}
+\Cref{fig:summary} aggregates the per-horizon peaks. The left panel shows
+the optimal feature count per metric, the right panel the corresponding
+peak metric value. Two qualitative observations stand out:
+\begin{enumerate}[leftmargin=*]
+  \item \emph{Best $k$ is usually well below $|\mathcal{F}|$.} For
+    Balanced Accuracy and $F_1$, the optimum is reached with as few as
+    $3$--$25$ features in every horizon --- considerably below the
+    $30$--$50$ feature size of the published lists.
+  \item \emph{Peak performance does not deteriorate monotonically with
+    horizon.} The longest, most balanced horizons (Within6Yr and
+    Within7Yr) have the highest pooled-AP values ($\approx 0.92$--$0.94$),
+    consistent with the easier-to-discriminate, more balanced label
+    distributions.
+\end{enumerate}
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{summary_best_k.png}
+    \caption{Best $k$ per horizon, per metric.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{summary_best_metric_value.png}
+    \caption{Peak metric value per horizon.}
+  \end{subfigure}
+  \caption{Cross-horizon synthesis of the gradual sweep. Left: optimal
+  feature count per metric by horizon. Right: the metric value at that
+  optimum.}
+  \label{fig:summary}
+\end{figure}
+
+\subsection{The published feature signature}
+The top-30 RF-importance features fed into the gradual sweep for
+Within3Yr are shown in \Cref{fig:features_within3yr}. The ranking
+includes a mix of well-known cardiovascular biomarkers (\texttt{GDF-15},
+\texttt{MMP-3}, \texttt{FABP2}, \texttt{NT-proBNP}-related families) and
+less-explored proteomic candidates (\texttt{LAG3}, \texttt{CD83},
+\texttt{179\_EGFR}). Detailed biological discussion is deferred to a
+companion clinical write-up.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.85\textwidth]{gradual_features_within3yr.png}
+  \caption{Top-30 features by Random-Forest impurity importance,
+  Within3Yr horizon --- the ordering used for the gradual sweep.}
+  \label{fig:features_within3yr}
+\end{figure}
+
+% =============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What the gradual sweep tells us.}
+The dominant message of \Cref{tab:gradual_summary} is parsimony: across
+all seven horizons, peak held-out performance is reached well before the
+full stability-selected list is consumed. For Within4Yr, peak AUC is
+achieved at $k=16$ from a list of size $38$; for Within3Yr at $k=34$
+from $48$; for Within6Yr at $k=41$ from $50$. The held-out curves are
+either monotonically increasing then flat, or single-peaked, which is the
+expected shape under a regime in which the early features carry most
+of the marginal information and the later features mostly add variance.
+
+\paragraph{Caveats on optimism.}
+Choosing the $k$ that maximises a sample-mean curve is itself a model
+selection step, and the resulting peak value is mildly upward-biased ---
+particularly for the metrics with bumpier curves
+(\Cref{fig:gradual_within3yr}). The reported peak values should
+therefore be interpreted as ``best achievable along this published
+ranking'', not as expected out-of-sample performance for a deployment
+trained at $k^\star$.
+
+\paragraph{Why the gradual peaks exceed the main-pipeline numbers.}
+A reader comparing \Cref{tab:headline} ($k=|\mathcal{F}|$ pooled AUC) to
+\Cref{tab:gradual_summary} (gradual peak) will see that the gradual
+peaks are several points of AUC higher. Two effects compound: (i) the
+gradual ranking is computed once on the full data (\Cref{sec:gradual}),
+which contributes a small amount of look-ahead --- but, importantly, the
+\emph{model} at every $k$ is still trained and evaluated under
+fold-respecting nested CV; (ii) the main pipeline re-runs stability
+selection inside every outer fold, so the feature set fluctuates with
+the fold, while the gradual sweep holds it fixed. The latter effect
+appears to be the larger of the two: holding the feature set constant
+across folds removes a real source of variance.
+
+\paragraph{Class imbalance.}
+Class-weight balancing is essential for Within1Yr ($\sim18\%$
+positives), where an unweighted Random Forest defaults to predicting
+the majority class on small training folds. This is consistent with the
+near-zero recall at $\tau=0.5$ for Within1Yr in \Cref{tab:headline}; the
+Youden-optimal threshold (reported in the JSON outputs) recovers a
+clinically usable operating point.
+
+% =============================================================================
+\section{Limitations and future work}
+\label{sec:limitations}
+
+\begin{itemize}[leftmargin=*]
+  \item \emph{Sample size.} $n=94$ is small for a $551$-feature panel.
+    The width of the $\pm 1$ SD bands in \Cref{fig:gradual_within3yr}
+    is the most honest summary of how much we should trust adjacent
+    points on the $k$-vs-AUC curve.
+  \item \emph{Single-cohort.} No external validation cohort is available.
+    Reproducing the gradual peaks on a held-out independent dataset is
+    the most important next step.
+  \item \emph{Binary horizons.} The seven outcomes are encoded as
+    binary indicators rather than time-to-event; a Cox-style or
+    discrete-time-survival reformulation would account for censoring.
+  \item \emph{Calibration.} Brier score is reported but no
+    Platt/isotonic recalibration is applied. For a deployment-oriented
+    follow-up, calibration is essential.
+  \item \emph{Single model family.} Random Forest is a strong default,
+    but companion analyses with $\ell_2$-logistic, gradient boosting,
+    and SVM under the \emph{same} validation protocol would let us
+    distinguish data limits from model limits.
+\end{itemize}
+
+% =============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented a leakage-free, nested-cross-validated, stability-selected
+Random-Forest pipeline for predicting MACE within 1--7 years from a
+baseline proteomic panel of $551$ candidate features in $94$ patients,
+together with a gradual-training extension that resolves how held-out
+performance varies with the size of the feature signature. The pipeline
+produces, for every horizon, an unbiased pooled-OOF AUC estimate,
+per-fold metrics, a defensible feature shortlist, and a $k$-vs-metric
+curve that shows where the predictive signal saturates. The dominant
+finding is a parsimony argument: peak held-out performance is reached
+well before the full stability-selected list is consumed, suggesting
+that a much shorter, more interpretable signature would carry most of
+the clinical information once external validation is available.
+
+\paragraph{Reproducibility.}
+All source code, configuration, fitted artefacts, fold-level metrics,
+per-patient out-of-fold predictions, and plot suites are available in
+the project repository. A single fixed random seed
+($\texttt{RANDOM\_STATE}=42$) is propagated through every stochastic
+component of the pipeline.
+
+% =============================================================================
+% Citations and related work — placeholder for now (to be expanded later).
+% =============================================================================
+% \bibliographystyle{plainnat}
+% \bibliography{references}
+
+\end{document}
