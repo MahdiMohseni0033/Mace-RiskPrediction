@@ -5,10 +5,20 @@ of follow-up, from a baseline proteomics panel of 551 candidate analytes,
 in a cohort of 94 patients.
 
 This repository contains a fully reproducible machine-learning pipeline
-intended for a peer-reviewed publication. The current model family is
-**Random Forest**; the code is structured so that additional model families
-(XGBoost, SVM, Logistic Regression, …) can be added later as sibling folders
-without touching the existing one.
+intended for a peer-reviewed publication. **Four model families** are
+implemented under a single, fixed validation protocol so that cross-model
+comparison is apples-to-apples:
+
+| Family | Entry point | Folder |
+|---|---|---|
+| Random Forest | `Random_Forest/src/train_rf.py` | `Random_Forest/` |
+| XGBoost | `XGBoost/src/train_xgb.py` | `XGBoost/` |
+| Logistic Regression (L1/L2) | `LogisticRegression/src/train_lr.py` | `LogisticRegression/` |
+| SVM with RBF kernel | `SVM/src/train_svm.py` | `SVM/` |
+
+Every family shares the same data, the same nested CV protocol, the same
+stability-selection feature step, and the same per-outcome output schema.
+Only the classifier and its hyperparameter grid differ.
 
 ---
 
@@ -19,44 +29,66 @@ Mace-RiskPrediction/
 ├── datasets/
 │   └── imputed_proteomics_base.csv     # primary input (94 × 559)
 ├── Random_Forest/
-│   ├── src/                            # main pipeline code
+│   ├── src/                            # main pipeline
+│   │   ├── config.py                   # CV / selection / RF hyperparameters
+│   │   ├── stability_selection.py      # L1-logistic stability selection
+│   │   ├── metrics_utils.py            # metrics + plotting helpers
+│   │   └── train_rf.py                 # entry point
+│   ├── src_gradual_training/
 │   │   ├── config.py
-│   │   ├── stability_selection.py
-│   │   ├── metrics_utils.py
-│   │   └── train_rf.py
-│   ├── results/                        # populated by the main pipeline
-│   │   ├── summary_metrics.csv         # one row per outcome
-│   │   ├── summary_metrics.json
-│   │   └── Within{1..7}Yr/
-│   │       ├── metrics.json
-│   │       ├── cv_fold_metrics.csv
-│   │       ├── cv_predictions.csv
-│   │       ├── selected_features_cv.csv
-│   │       ├── final_selected_features.csv
-│   │       ├── best_hyperparameters.json
-│   │       ├── model.joblib
-│   │       └── plots/  (ROC, PR, confusion-matrix, feature plots)
-│   ├── src_gradual_training/           # gradual-training analysis
-│   │   ├── config.py                   # which outcomes, hyperparam strategy
 │   │   └── gradual_train.py            # top-k sweep entry point
+│   ├── results/                        # populated by the main pipeline
 │   └── results_gradual_training/       # populated by the gradual pipeline
-│       ├── Report.md                   # cross-outcome scientific report
-│       ├── summary_gradual_training.csv
-│       ├── summary_best_k.png
-│       ├── summary_best_metric_value.png
-│       └── Within{1..7}Yr_results/
-│           ├── report.md               # per-outcome report (peak per metric)
-│           ├── peak_summary.json
-│           ├── metrics_per_k.csv
-│           ├── cv_fold_metrics_per_k.csv
-│           ├── cv_predictions_per_k.csv
-│           ├── best_hyperparameters_per_k.csv
-│           ├── final_selected_features_used.csv
-│           └── plots/  (per-metric vs k, heatmaps, peak markers, ROC overlay)
+├── XGBoost/                            # same layout as Random_Forest/
+│   ├── src/{config.py, stability_selection.py, metrics_utils.py, train_xgb.py}
+│   ├── src_gradual_training/{config.py, gradual_train.py}
+│   ├── results/
+│   └── results_gradual_training/
+├── LogisticRegression/                 # same layout
+│   ├── src/{..., train_lr.py}
+│   ├── src_gradual_training/{config.py, gradual_train.py}
+│   ├── results/
+│   └── results_gradual_training/
+├── SVM/                                # same layout
+│   ├── src/{..., train_svm.py}
+│   ├── src_gradual_training/{config.py, gradual_train.py}
+│   ├── results/
+│   └── results_gradual_training/
 ├── Report.md                           # scientific report
 ├── README.md                           # this file
 └── CLAUDE.md                           # implementation notes / dev guide
 ```
+
+Inside each family's `results/Within{k}Yr/` you will always find the same
+files (so cross-model comparison is straightforward):
+
+```
+metrics.json
+cv_fold_metrics.csv
+cv_predictions.csv
+selected_features_cv.csv
+final_selected_features.csv     # importance column varies per model
+best_hyperparameters.json
+model.joblib
+plots/                          # ROC, PR, confusion-matrix, feature plots
+```
+
+…and inside each family's `results_gradual_training/Within{k}Yr_results/`:
+
+```
+report.md
+peak_summary.json
+metrics_per_k.csv
+cv_fold_metrics_per_k.csv
+cv_predictions_per_k.csv
+best_hyperparameters_per_k.csv
+final_selected_features_used.csv
+plots/
+```
+
+The four `results/` and four `results_gradual_training/` directories are
+git-ignored — they are regenerable from the code under fixed
+`RANDOM_STATE = 42`.
 
 ---
 
@@ -91,20 +123,24 @@ Class balance per horizon:
 
 ## 3. Method (one-paragraph summary)
 
-For each of the seven horizons we train a Random-Forest classifier inside a
-**nested cross-validation** loop. The outer loop is a 5-fold
+For each of the seven horizons we train **one classifier per family** inside
+a **nested cross-validation** loop. The outer loop is a 5-fold
 `RepeatedStratifiedKFold` repeated 3 times (15 unbiased held-out estimates).
 Inside every outer training fold, **stability selection** with an
 L1-regularised logistic regression is run independently — 100 random
 75 % subsamples × 3 regularisation strengths — and only features whose
 maximum across-C selection frequency exceeds 0.60 (with a min of 5 / max of
-50) are passed to the Random Forest. Random-Forest hyperparameters are
-tuned by **exhaustive grid search** (`sklearn.model_selection.GridSearchCV`,
-`scoring="roc_auc"`, `refit=True`) over the small discrete grid below, on
-the 5-fold stratified inner CV. The final published model is fitted by
-re-running stability selection on the full data and refitting the Random
-Forest with the most-frequent winning hyperparameter combination from the
-outer folds. Full details and the rationale are in `Report.md`.
+50) are passed to the classifier. Hyperparameters are tuned by **exhaustive
+grid search** (`sklearn.model_selection.GridSearchCV`, `scoring="roc_auc"`,
+`refit=True`) on the 5-fold stratified inner CV. The grid varies per family
+(Random Forest, XGBoost, L1/L2 logistic regression, RBF-kernel SVC); the
+validation protocol and feature-selection step do not. The final published
+model for each family is fitted by re-running stability selection on the
+full data and refitting that family's classifier with the most-frequent
+winning hyperparameter combination from the outer folds. Class imbalance is
+handled with `class_weight="balanced"` for RF/LR/SVM and
+`scale_pos_weight = #neg / #pos` for XGBoost. Full details and the rationale
+are in `Report.md` and `CLAUDE.md`.
 
 ---
 
@@ -138,49 +174,56 @@ configuration that produced those numbers.
 
 ### Environment
 
-A Python 3.11 virtual environment is provided at `.venv/`. The pipeline
-needs only the standard scientific stack:
+A Python 3.11 virtual environment is provided at `.venv/`. The pipelines
+need the standard scientific stack plus `xgboost`:
 
 ```bash
-.venv/bin/pip install pandas scikit-learn numpy matplotlib seaborn joblib
+.venv/bin/pip install pandas scikit-learn numpy matplotlib seaborn joblib xgboost
 ```
 
-(These are already installed in the supplied venv.)
+(All four are already installed in the supplied venv.)
 
-### Run the pipeline
+### Run the main pipelines
 
 ```bash
-# all seven horizons (default)
+# all seven horizons, one model family at a time
 .venv/bin/python Random_Forest/src/train_rf.py
+.venv/bin/python XGBoost/src/train_xgb.py
+.venv/bin/python LogisticRegression/src/train_lr.py
+.venv/bin/python SVM/src/train_svm.py
 
-# a subset
-.venv/bin/python Random_Forest/src/train_rf.py --outcomes Within1Yr Within3Yr
+# a subset of horizons (works for any of the four)
+.venv/bin/python XGBoost/src/train_xgb.py --outcomes Within1Yr Within3Yr
 ```
 
-The pipeline is deterministic given `RANDOM_STATE = 42` (set in
-`Random_Forest/src/config.py`). Total runtime is on the order of a few
-minutes on a multi-core machine; stability selection and the inner CV use
-all available cores via `joblib`.
+Every pipeline is deterministic given `RANDOM_STATE = 42`. Each main run
+takes on the order of a couple of minutes on a multi-core machine; stability
+selection and the inner CV use all available cores via `joblib`. To run
+several model families concurrently, set `OMP_NUM_THREADS=1` to avoid
+oversubscription.
 
-### Run the gradual-training analysis
+### Run the gradual-training analyses
 
-After the main pipeline has finished (the gradual sweep reads its
-`final_selected_features.csv` files), run:
+After a model family's main pipeline has finished (the gradual sweep reads
+its own `final_selected_features.csv` files), run the matching gradual
+script:
 
 ```bash
-# all outcomes configured in src_gradual_training/config.py
 .venv/bin/python Random_Forest/src_gradual_training/gradual_train.py
+.venv/bin/python XGBoost/src_gradual_training/gradual_train.py
+.venv/bin/python LogisticRegression/src_gradual_training/gradual_train.py
+.venv/bin/python SVM/src_gradual_training/gradual_train.py
 
 # subset
-.venv/bin/python Random_Forest/src_gradual_training/gradual_train.py --outcomes Within3Yr Within5Yr
+.venv/bin/python XGBoost/src_gradual_training/gradual_train.py --outcomes Within3Yr Within5Yr
 ```
 
-This trains, for each outcome, one Random Forest per `k = 1, 2, ..., N`
-features (where N is the size of the published feature ranking) under the
-same nested CV protocol as the main pipeline, and writes per-k metrics,
-per-fold predictions, and a rich plot suite to
-`Random_Forest/results_gradual_training/`. The cross-outcome scientific
-report is written to `Random_Forest/results_gradual_training/Report.md`.
+Each script trains, for each outcome, one classifier per `k = 1, 2, ..., N`
+features (where N is the size of that family's published feature ranking)
+under the same nested CV protocol as the main pipeline, and writes per-k
+metrics, per-fold predictions, and a rich plot suite to
+`<Model>/results_gradual_training/`. The cross-outcome scientific report
+for each family is written to its `Report.md` inside that directory.
 
 ### Loading a trained model
 
@@ -200,26 +243,15 @@ The bundle stores: `model`, `scaler_for_l1`, `selected_feature_names`,
 
 ---
 
-## 6. Adding a new model family
+## 6. Adding another model family
 
-Create a sibling top-level folder, copy the `src/` skeleton, and reuse
+Create a sibling top-level folder, copy the `src/` and
+`src_gradual_training/` skeletons from any existing family (the four
+already in the repo are a working template), and reuse
 `stability_selection.py` and `metrics_utils.py` so that cross-model
-comparison is fair:
-
-```
-Mace-RiskPrediction/
-├── Random_Forest/
-├── XGBoost/                   # new
-│   ├── src/
-│   └── results/
-└── SVM/                       # new
-    ├── src/
-    └── results/
-```
-
-The validation protocol, feature-selection step, and output schema must be
-held constant across model families — only the classifier and its
-hyperparameter grid should change. See `CLAUDE.md` for the rules.
+comparison is fair. The validation protocol, feature-selection step, and
+output schema must be held constant — only the classifier and its
+hyperparameter grid should change. See `CLAUDE.md` for the full rules.
 
 ---
 

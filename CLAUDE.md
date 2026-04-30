@@ -11,7 +11,10 @@ guidance that should be followed for every change.
 **Goal.** Build, evaluate and document machine-learning models that predict the
 occurrence of a Major Adverse Cardiovascular Event (MACE) within 1, 2, …, 7
 years after the index visit, from a baseline proteomics panel plus a few
-clinical features.
+clinical features. The work is intended as a peer-reviewed publication, so the
+project compares **four model families** under a single, fixed validation
+protocol: **Random Forest**, **XGBoost**, **Logistic Regression**, and
+**SVM with an RBF kernel**.
 
 **Dataset.** `datasets/imputed_proteomics_base.csv`
 - 94 patients (rows), 559 columns
@@ -45,43 +48,42 @@ Mace-RiskPrediction/
 │   │   ├── metrics_utils.py               # metrics + plotting helpers
 │   │   └── train_rf.py                    # main entry point
 │   ├── results/                           # main pipeline outputs
-│   │   ├── summary_metrics.csv            # one row per outcome
-│   │   ├── summary_metrics.json           # same + full configuration
-│   │   └── Within{k}Yr/                   # one folder per horizon
-│   │       ├── metrics.json
-│   │       ├── cv_fold_metrics.csv
-│   │       ├── cv_predictions.csv
-│   │       ├── selected_features_cv.csv
-│   │       ├── final_selected_features.csv
-│   │       ├── best_hyperparameters.json
-│   │       ├── model.joblib
-│   │       └── plots/
 │   ├── src_gradual_training/              # gradual-training sweep
-│   │   ├── config.py                      # outcomes, hyperparam strategy, k range
-│   │   └── gradual_train.py               # entry point
+│   │   ├── config.py
+│   │   └── gradual_train.py
 │   └── results_gradual_training/          # gradual sweep outputs
-│       ├── Report.md                      # cross-outcome scientific report
-│       ├── summary_gradual_training.csv
-│       ├── summary_best_k.png
-│       ├── summary_best_metric_value.png
-│       └── Within{k}Yr_results/
-│           ├── report.md                  # per-outcome report
-│           ├── peak_summary.json
-│           ├── metrics_per_k.csv
-│           ├── cv_fold_metrics_per_k.csv
-│           ├── cv_predictions_per_k.csv
-│           ├── best_hyperparameters_per_k.csv
-│           ├── final_selected_features_used.csv
-│           └── plots/                     # 20+ plots per outcome
+├── XGBoost/                               # XGBoost model family (same layout)
+│   ├── src/{config.py, stability_selection.py, metrics_utils.py, train_xgb.py}
+│   ├── src_gradual_training/{config.py, gradual_train.py}
+│   ├── results/                           # populated by train_xgb.py
+│   └── results_gradual_training/
+├── LogisticRegression/                    # L1/L2 logistic regression
+│   ├── src/{config.py, stability_selection.py, metrics_utils.py, train_lr.py}
+│   ├── src_gradual_training/{config.py, gradual_train.py}
+│   ├── results/
+│   └── results_gradual_training/
+├── SVM/                                   # SVC with RBF kernel
+│   ├── src/{config.py, stability_selection.py, metrics_utils.py, train_svm.py}
+│   ├── src_gradual_training/{config.py, gradual_train.py}
+│   ├── results/
+│   └── results_gradual_training/
 ├── Report.md                              # scientific report (publication-style)
 ├── README.md                              # how to run + outputs
 └── CLAUDE.md                              # this file
 ```
 
-If a new model family is added later (XGBoost, SVM, Logistic Regression, …),
-**create a new sibling folder** (`XGBoost/`, `SVM/`, `LogisticRegression/`, …)
-following the same `src/` + `results/` structure. Do **not** mix model
-families inside an existing folder.
+Every model family follows an **identical** internal layout — `src/` for the
+main pipeline, `src_gradual_training/` for the per-k feature-count sweep,
+`results/` and `results_gradual_training/` for outputs. Each `Within{k}Yr/`
+results folder contains the same files (`metrics.json`, `cv_fold_metrics.csv`,
+`cv_predictions.csv`, `selected_features_cv.csv`, `final_selected_features.csv`,
+`best_hyperparameters.json`, `model.joblib`, `plots/`).
+
+If a new model family is added later, **create a new sibling folder** following
+the same `src/` + `src_gradual_training/` structure. Do **not** mix model
+families inside an existing folder. Each model's `results/` and
+`results_gradual_training/` directories are git-ignored — the pipelines
+regenerate them deterministically from `RANDOM_STATE = 42`.
 
 ---
 
@@ -121,14 +123,47 @@ which the results will be defended in a paper.
   frequency. Hard cap at 50 selected features.
 
 ### Modelling
-- For now: scikit-learn `RandomForestClassifier` with
-  `class_weight="balanced"` and `random_state` fixed.
-- Hyperparameters tuned on the inner CV with `roc_auc` as the optimisation
-  metric. Grid is intentionally small (avoid overfitting CV scores at small
-  N): `n_estimators ∈ {300}`, `max_depth ∈ {None, 5}`,
-  `min_samples_leaf ∈ {1, 3}`, `max_features ∈ {"sqrt", 0.3}`.
-- Trees are scale-invariant — the `StandardScaler` exists only to feed the
-  L1 selector. Random-Forest training uses the raw selected columns.
+
+All four families share the *same* feature-selection step, the *same* nested
+CV protocol, the *same* output schema, and `roc_auc` as the inner-CV scoring
+metric. The classifier and its grid differ; everything else is held fixed so
+cross-model comparison is apples-to-apples.
+
+- **Random Forest** — `RandomForestClassifier` with `class_weight="balanced"`.
+  Grid: `n_estimators ∈ {300}`, `max_depth ∈ {None, 5}`,
+  `min_samples_leaf ∈ {1, 3}`, `max_features ∈ {"sqrt", 0.3}`. Trees are
+  scale-invariant; the `StandardScaler` is used only inside L1 selection.
+- **XGBoost** — `XGBClassifier(objective="binary:logistic",
+  tree_method="hist")` with `scale_pos_weight = #neg / #pos` per fold. Grid:
+  `n_estimators ∈ {200, 400}`, `max_depth ∈ {3, 5}`,
+  `learning_rate ∈ {0.05, 0.1}`, `subsample = 0.8`, `colsample_bytree = 0.8`,
+  `reg_lambda = 1.0`, `min_child_weight = 1`. Trees are scale-invariant; the
+  raw selected columns are passed in.
+- **Logistic Regression** — `Pipeline(StandardScaler, LogisticRegression)`
+  with `class_weight="balanced"`. The pipeline is mandatory — LR is
+  scale-sensitive. Grid covers both penalties: `{penalty=l2, C ∈ {0.01,
+  0.1, 1.0, 10.0}, solver=lbfgs}` and `{penalty=l1, C ∈ {0.1, 1.0, 10.0},
+  solver=liblinear}`. `max_iter=5000`.
+- **SVM (RBF)** — `Pipeline(StandardScaler, SVC(kernel="rbf",
+  probability=True, class_weight="balanced"))`. Grid:
+  `C ∈ {0.1, 1.0, 10.0}`, `gamma ∈ {"scale", 0.01, 0.1}`. Probabilities are
+  Platt-scaled by sklearn (`probability=True`) for downstream metrics.
+
+### Final-model feature importance
+
+The "importance" column in each model's `final_selected_features.csv` is the
+ranking that drives that model's gradual-training sweep:
+
+| Model | Importance column | Definition |
+|---|---|---|
+| Random Forest | `rf_importance` | mean decrease in impurity |
+| XGBoost | `xgb_importance` | gain-based importance (sklearn API default) |
+| Logistic Regression | `lr_importance` | `|standardised coefficient|` from the fitted Pipeline |
+| SVM (RBF) | `svm_importance` | permutation importance (drop in ROC AUC, `n_repeats=30`) on the final fitted Pipeline |
+
+Permutation importance is used for SVM because RBF kernels have no native
+feature_importances_. For RF/XGB/LR, the model-native importance is the
+canonical choice.
 
 ### Reproducibility
 - Single `RANDOM_STATE = 42` propagated to every stochastic component.
@@ -164,29 +199,43 @@ row per outcome for at-a-glance comparison.
 
 ## 5. How to run
 
-```bash
-# from the project root — main pipeline
-.venv/bin/python Random_Forest/src/train_rf.py            # all 7 horizons
-.venv/bin/python Random_Forest/src/train_rf.py --outcomes Within1Yr Within3Yr
+Each model family has its own main entry point and its own gradual-training
+entry point. The gradual-training scripts depend on the main pipeline's
+`results/Within{k}Yr/final_selected_features.csv`, so always run main first.
 
-# gradual-training sweep (depends on the main run's results/)
+```bash
+# from the project root — main pipelines
+.venv/bin/python Random_Forest/src/train_rf.py
+.venv/bin/python XGBoost/src/train_xgb.py
+.venv/bin/python LogisticRegression/src/train_lr.py
+.venv/bin/python SVM/src/train_svm.py
+
+# gradual-training sweeps (depend on each main run's results/)
 .venv/bin/python Random_Forest/src_gradual_training/gradual_train.py
-.venv/bin/python Random_Forest/src_gradual_training/gradual_train.py --outcomes Within3Yr
+.venv/bin/python XGBoost/src_gradual_training/gradual_train.py
+.venv/bin/python LogisticRegression/src_gradual_training/gradual_train.py
+.venv/bin/python SVM/src_gradual_training/gradual_train.py
+
+# subset:
+.venv/bin/python XGBoost/src/train_xgb.py --outcomes Within1Yr Within3Yr
 ```
 
-The first invocation creates `Random_Forest/results/` and overwrites previous
-runs. The gradual script writes to `Random_Forest/results_gradual_training/`.
-Set `OMP_NUM_THREADS=1` if you intend to launch multiple training sessions in
-parallel.
+Each invocation creates / overwrites that model's `results/` (or
+`results_gradual_training/`) tree. Set `OMP_NUM_THREADS=1` if you intend to
+launch multiple model families in parallel — the inner GridSearchCV already
+parallelises over folds via `N_JOBS=-1`.
 
 ### 5.1 Gradual-training rules
 
-- **Always run the main pipeline first.** The gradual sweep reads each
-  outcome's `final_selected_features.csv` from `Random_Forest/results/`. If
-  that file is missing, the outcome is skipped with a warning.
-- **Feature ordering is by `rf_importance` (descending)** — the same column
-  that the main pipeline writes. Don't switch to `stability_frequency`
-  silently; if you want to compare orderings, add a config flag.
+- **Always run that model's main pipeline first.** The gradual sweep reads
+  each outcome's `final_selected_features.csv` from
+  `<Model>/results/Within{k}Yr/`. If that file is missing, the outcome is
+  skipped with a warning.
+- **Feature ordering is by the model's own importance column**
+  (`rf_importance`, `xgb_importance`, `lr_importance`, `svm_importance`).
+  Each model's gradual sweep characterises *its own* published ranking,
+  not someone else's. Don't switch to `stability_frequency` silently; if
+  you want to compare orderings, add a config flag.
 - **Same nested CV as the main pipeline.** Outer
   `RepeatedStratifiedKFold(5, 3)` and inner `StratifiedKFold(5)` are reused
   so the curve at k = N is directly comparable to the main pipeline's

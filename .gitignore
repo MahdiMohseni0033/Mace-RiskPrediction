@@ -55,3 +55,14 @@ dataset_profile.txt
 # --- Project-specific ad-hoc scratch ---
 scratch/
 tmp/
+logs/
+
+# --- Per-model results directories (regenerable from the pipelines) ---
+Random_Forest/results/
+Random_Forest/results_gradual_training/
+XGBoost/results/
+XGBoost/results_gradual_training/
+LogisticRegression/results/
+LogisticRegression/results_gradual_training/
+SVM/results/
+SVM/results_gradual_training/
